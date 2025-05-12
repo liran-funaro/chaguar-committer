@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
 	healthgrpc "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
@@ -20,6 +19,7 @@ import (
 	"github.ibm.com/decentralized-trust-research/scalable-committer/api/protoblocktx"
 	"github.ibm.com/decentralized-trust-research/scalable-committer/utils/channel"
 	"github.ibm.com/decentralized-trust-research/scalable-committer/utils/connection"
+	"github.ibm.com/decentralized-trust-research/scalable-committer/utils/grpcerror"
 	"github.ibm.com/decentralized-trust-research/scalable-committer/utils/logging"
 )
 
@@ -237,22 +237,35 @@ func EnsurePersistedTxStatus(
 
 // CheckServerStopped returns true if the grpc server listening on a
 // given address has been stopped.
-func CheckServerStopped(t *testing.T, addr string) bool {
+func CheckServerStopped(t *testing.T, addr string, waitFor time.Duration) bool {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 
-	conn, err := grpc.DialContext( //nolint:staticcheck
-		ctx,
-		addr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithBlock(), //nolint:staticcheck
-	)
-	if err != nil {
+	dialConf, err := connection.NewDialConfigPerEndpoint(&connection.ClientConfig{
+		Endpoints: []*connection.Endpoint{connection.CreateEndpoint(addr)},
+		Retry: &connection.RetryProfile{
+			MaxElapsedTime: waitFor,
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, dialConf, 1)
+	conn, err := connection.Connect(dialConf[0])
+	require.NoError(t, err)
+	defer connection.CloseConnectionsLog(conn)
+	healthClient := healthgrpc.NewHealthClient(conn)
+	res, err := healthClient.Check(ctx, &healthgrpc.HealthCheckRequest{}, grpc.WaitForReady(true))
+	assert.NotEqual(t, codes.Canceled, status.Code(err))
+	if grpcerror.HasCode(err, codes.Unimplemented) {
+		// If the server responded "Unimplemented", then it is still alive.
 		return true
 	}
-	_ = conn.Close()
-	return false
+	if err != nil {
+		return false
+	}
+	require.NotNil(t, res)
+	require.Equal(t, healthgrpc.HealthCheckResponse_SERVING, res.Status)
+	return true
 }
 
 // SetupDebugging can be added for development to tests that required additional debugging info.
