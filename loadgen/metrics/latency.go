@@ -117,32 +117,6 @@ func (c *SamplerConfig) TxSampler() KeyTracingSampler {
 	}
 }
 
-// BlockSampler returns a NumberTracingSampler for latency monitoring.
-func (c *SamplerConfig) BlockSampler() NumberTracingSampler {
-	switch c.Type {
-	case SampleAlways:
-		return func(uint64) bool { return true }
-	case SampleNever, "":
-		return func(uint64) bool { return false }
-	case SampleHash:
-		return func(hash uint64) bool {
-			return hash%c.SamplePeriod < c.SampleSize && hash%c.Ratio == 0
-		}
-	case SampleTimer:
-		ticker := time.NewTicker(c.SamplingInterval)
-		return func(uint64) bool {
-			select {
-			case <-ticker.C:
-				return true
-			default:
-				return false
-			}
-		}
-	default:
-		panic("type " + c.Type + " not supported")
-	}
-}
-
 func uniformBuckets(count int, from, to float64) []float64 {
 	if to < from {
 		panic("invalid input")
