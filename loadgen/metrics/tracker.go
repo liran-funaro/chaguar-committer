@@ -36,6 +36,9 @@ func (c *latencyReceiverSender) onSendTransaction(txID string) {
 //
 //nolint:revive // parameter 'success' seems to be a control flag, but it is not.
 func (c *latencyReceiverSender) onReceiveTransaction(txID string, success bool) {
+	if !c.txSampler(txID) {
+		return
+	}
 	start, loaded := c.latencyTracker.LoadAndDelete(txID)
 	if !loaded {
 		return

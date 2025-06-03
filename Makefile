@@ -138,7 +138,7 @@ kill-test-docker: FORCE
 
 # Run a load generation benchmarks with added op/sec column.
 bench-loadgen: FORCE
-	$(go_cmd) test ./loadgen/workload/... -bench "BenchmarkGen.*" -run=^$ | awk -f scripts/bench-tx-per-sec.awk
+	$(go_cmd) test ./loadgen/workload/... -bench "BenchmarkGen.*" -run="^$$" | awk -f scripts/bench-tx-per-sec.awk
 
 #########################
 # Generate protos
