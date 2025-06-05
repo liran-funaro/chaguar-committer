@@ -52,7 +52,6 @@ func NewTxStream(
 	options *StreamOptions,
 	modifierGenerators ...Generator[Modifier],
 ) *TxStream {
-	signer := NewTxSignerVerifier(profile.Transaction.Policy)
 	txStream := &TxStream{stream: newStream(profile, options)}
 	for _, w := range makeWorkersData(profile) {
 		modifiers := make([]Modifier, 0, len(modifierGenerators)+2)
@@ -63,6 +62,7 @@ func NewTxStream(
 			modifiers = append(modifiers, mod.Next())
 		}
 		// The signer must be the last modifier.
+		signer := NewTxSignerVerifierWithRnd(profile.Transaction.Policy, NewRandFromSeedGenerator(w.seed))
 		modifiers = append(modifiers, newSignTxModifier(NewRandFromSeedGenerator(w.seed), signer, profile))
 
 		txGen := newIndependentTxGenerator(NewRandFromSeedGenerator(w.seed), w.keyGen, &profile.Transaction)

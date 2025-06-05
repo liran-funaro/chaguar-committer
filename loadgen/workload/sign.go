@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package workload
 
 import (
+	"io"
 	"os"
 
 	"github.com/cockroachdb/errors"
@@ -42,13 +43,18 @@ var defaultPolicy = Policy{
 
 // NewTxSignerVerifier creates a new TxSignerVerifier given a workload profile.
 func NewTxSignerVerifier(policy *PolicyProfile) *TxSignerVerifier {
+	return NewTxSignerVerifierWithRnd(policy, nil)
+}
+
+// NewTxSignerVerifierWithRnd creates a new TxSignerVerifier given a workload profile.
+func NewTxSignerVerifierWithRnd(policy *PolicyProfile, rnd io.Reader) *TxSignerVerifier {
 	signers := make(map[string]*HashSignerVerifier)
 	// We set default policy to ensure smooth operation even if the user did not specify anything.
-	signers[GeneratedNamespaceID] = NewHashSignerVerifier(&defaultPolicy)
-	signers[types.MetaNamespaceID] = NewHashSignerVerifier(&defaultPolicy)
+	signers[GeneratedNamespaceID] = NewHashSignerVerifierWitRnd(&defaultPolicy, rnd)
+	signers[types.MetaNamespaceID] = NewHashSignerVerifierWitRnd(&defaultPolicy, rnd)
 
 	for nsID, p := range policy.NamespacePolicies {
-		signers[nsID] = NewHashSignerVerifier(p)
+		signers[nsID] = NewHashSignerVerifierWitRnd(p, rnd)
 	}
 	return &TxSignerVerifier{
 		HashSigners: signers,
@@ -81,6 +87,11 @@ func (e *TxSignerVerifier) Verify(tx *protoblocktx.Tx) bool {
 
 // NewHashSignerVerifier creates a new HashSignerVerifier given a workload profile and a seed.
 func NewHashSignerVerifier(profile *Policy) *HashSignerVerifier {
+	return NewHashSignerVerifierWitRnd(profile, nil)
+}
+
+// NewHashSignerVerifierWitRnd creates a new HashSignerVerifier given a workload profile and a seed.
+func NewHashSignerVerifierWitRnd(profile *Policy, rnd io.Reader) *HashSignerVerifier {
 	logger.Debugf("sig profile: %v", profile)
 	factory := sigtest.NewSignatureFactory(profile.Scheme)
 
@@ -97,7 +108,7 @@ func NewHashSignerVerifier(profile *Policy) *HashSignerVerifier {
 	}
 	v, err := factory.NewVerifier(verificationKey)
 	utils.Must(err)
-	signer, err := factory.NewSigner(signingKey)
+	signer, err := factory.NewSignerWithRnd(signingKey, rnd)
 	utils.Must(err)
 
 	return &HashSignerVerifier{

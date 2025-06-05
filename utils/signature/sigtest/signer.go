@@ -10,6 +10,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/rand"
+	"io"
 	"math/big"
 	"strings"
 
@@ -38,7 +39,8 @@ type (
 
 	// EddsaSigner signs using the EDDSA scheme.
 	EddsaSigner struct {
-		PrivateKey ed25519.PrivateKey
+		privateKey ed25519.PrivateKey
+		rnd        io.Reader
 	}
 
 	// BlsSigner signs using the BLS scheme.
@@ -49,11 +51,21 @@ type (
 	// EcdsaSigner signs using the ECDSA scheme.
 	EcdsaSigner struct {
 		signingKey *ecdsa.PrivateKey
+		rnd        io.Reader
 	}
 )
 
 // NewNsSigner creates a new namespace signer according to the implementation scheme.
 func NewNsSigner(scheme signature.Scheme, key []byte) (*NsSigner, error) {
+	return NewNsSignerWithRnd(scheme, key, nil)
+}
+
+// NewNsSignerWithRnd creates a new namespace signer according to the implementation scheme with specific rand gen.
+func NewNsSignerWithRnd(scheme signature.Scheme, key []byte, rnd io.Reader) (*NsSigner, error) {
+	if rnd == nil {
+		// Use crypto reader by default.
+		rnd = rand.Reader
+	}
 	scheme = strings.ToUpper(scheme)
 	var err error
 	var s DigestSigner
@@ -61,11 +73,11 @@ func NewNsSigner(scheme signature.Scheme, key []byte) (*NsSigner, error) {
 	case signature.NoScheme, "":
 		s = &DummySigner{}
 	case signature.Ecdsa:
-		s, err = NewEcdsaSigner(key)
+		s, err = NewEcdsaSigner(key, rnd)
 	case signature.Bls:
 		s = NewBlsSigner(key)
 	case signature.Eddsa:
-		s = &EddsaSigner{PrivateKey: key}
+		s = &EddsaSigner{privateKey: key, rnd: rnd}
 	default:
 		return nil, errors.Newf("scheme '%v' not supported", scheme)
 	}
@@ -80,12 +92,12 @@ func NewBlsSigner(key signature.PrivateKey) *BlsSigner {
 }
 
 // NewEcdsaSigner instantiate a EcdsaSigner given a key.
-func NewEcdsaSigner(key signature.PrivateKey) (*EcdsaSigner, error) {
+func NewEcdsaSigner(key signature.PrivateKey, rnd io.Reader) (*EcdsaSigner, error) {
 	signingKey, err := ParseSigningKey(key)
 	if err != nil {
 		return nil, err
 	}
-	return &EcdsaSigner{signingKey: signingKey}, nil
+	return &EcdsaSigner{signingKey: signingKey, rnd: rnd}, nil
 }
 
 // SignNs signs a transaction's namespace.
@@ -107,7 +119,7 @@ func (*DummySigner) Sign(signature.Digest) (signature.Signature, error) {
 
 // Sign signs a digest.
 func (b *EddsaSigner) Sign(digest signature.Digest) (signature.Signature, error) {
-	sig, err := b.PrivateKey.Sign(nil, digest, &ed25519.Options{
+	sig, err := b.privateKey.Sign(b.rnd, digest, &ed25519.Options{
 		Context: "Example_ed25519ctx",
 	})
 	return sig, errors.Wrap(err, "signing failed")
@@ -126,6 +138,6 @@ func (b *BlsSigner) Sign(digest signature.Digest) (signature.Signature, error) {
 
 // Sign signs a digest.
 func (s *EcdsaSigner) Sign(digest signature.Digest) (signature.Signature, error) {
-	sig, err := ecdsa.SignASN1(rand.Reader, s.signingKey, digest)
+	sig, err := ecdsa.SignASN1(s.rnd, s.signingKey, digest)
 	return sig, errors.Wrap(err, "failed to sign transaction")
 }

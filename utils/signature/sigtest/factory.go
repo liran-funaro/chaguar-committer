@@ -12,6 +12,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/binary"
+	"io"
 	"math/big"
 	pseudorand "math/rand"
 	"strings"
@@ -61,6 +62,11 @@ func (f *SignerVerifierFactory) Scheme() signature.Scheme {
 func (f *SignerVerifierFactory) NewVerifier(key signature.PublicKey) (*signature.NsVerifier, error) {
 	v, err := signature.NewNsVerifier(f.scheme, key)
 	return v, errors.Wrap(err, "error creating verifier")
+}
+
+// NewSignerWithRnd instantiate a signer given a private key.
+func (f *SignerVerifierFactory) NewSignerWithRnd(key signature.PrivateKey, rnd io.Reader) (*NsSigner, error) {
+	return NewNsSignerWithRnd(f.scheme, key, rnd)
 }
 
 // NewSigner instantiate a signer given a private key.

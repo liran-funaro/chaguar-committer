@@ -40,7 +40,8 @@ func defaultProfile(workers uint32) *Profile {
 			Size: 10,
 		},
 		Transaction: TransactionProfile{
-			ReadWriteCount: NewConstantDistribution(2),
+			ReadWriteValueSize: 32,
+			ReadWriteCount:     NewConstantDistribution(2),
 			Policy: &PolicyProfile{
 				NamespacePolicies: map[string]*Policy{
 					GeneratedNamespaceID:  {Scheme: signature.Ecdsa},
@@ -118,15 +119,15 @@ func BenchmarkGenTx(b *testing.B) {
 	//nolint:thelper // false positive.
 	genericBench(b, func(b *testing.B, p *Profile) {
 		t := NewTxStream(p, defaultBenchStreamOptions())
+		batchSize := int(p.Block.Size) //nolint:gosec // uint64 -> int.
+		n := max(1, b.N/batchSize)
 
 		b.ResetTimer()
 		test.RunServiceForTest(b.Context(), b, t.Run, t.WaitForReady)
 		g := t.MakeGenerator()
-
 		var sum float64
-		n := max(1, b.N/int(p.Block.Size)) //nolint:gosec // uint64 -> int.
 		for range n {
-			txs := g.NextN(b.Context(), int(p.Block.Size)) //nolint:gosec // uint64 -> int.
+			txs := g.NextN(b.Context(), batchSize)
 			sum += float64(len(txs))
 		}
 		b.StopTimer()
