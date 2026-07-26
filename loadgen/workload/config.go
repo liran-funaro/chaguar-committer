@@ -113,7 +113,7 @@ type TransactionProfile struct {
 	// the static pre-genesis (negative) working set. A positive value must not exceed the TOTAL slot count
 	// (read-only + read-write-count + write-count); surplus beyond the write-slot count spills into
 	// read-only slots as nonexistent reads.
-	NewKeysRate *float64 `mapstructure:"new-keys-rate" yaml:"new-keys-rate"`
+	NewKeysRate *float64 `mapstructure:"new-keys-rate" yaml:"new-keys-rate" validate:"omitempty,gte=0"`
 	// ReferenceGap is the MINIMUM transaction distance behind the current transaction from which existing
 	// references are drawn: at transaction j the reference window ends at the committable frontier as of
 	// j-gap, i.e. top = C(max(0, j-gap)). 0 (default) references the newest keys (in-flight, highest
@@ -143,12 +143,8 @@ func (p *TransactionProfile) Validate() error {
 	if p.NewKeysRate == nil {
 		return nil
 	}
-	rate := *p.NewKeysRate
-	if rate < 0 {
-		return errors.Newf("new-keys-rate must be non-negative, got %v", rate)
-	}
 	totalSlots := uint64(p.ReadOnlyCount) + uint64(p.ReadWriteCount) + uint64(p.BlindWriteCount)
-	if rate > float64(totalSlots) {
+	if rate := *p.NewKeysRate; rate > float64(totalSlots) {
 		return errors.Newf("new-keys-rate %v exceeds total slots %d (read-only + read-write + write)",
 			rate, totalSlots)
 	}

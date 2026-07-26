@@ -80,7 +80,10 @@ func NewLoadGenClient(conf *ClientConfig) (*Client, error) {
 	}
 
 	// After creating the artifacts, we can create the stream.
-	c.txStream = workload.NewTxStream(conf.LoadProfile, conf.Stream)
+	c.txStream, err = workload.NewTxStream(conf.LoadProfile, conf.Stream)
+	if err != nil {
+		return nil, err
+	}
 	c.resources.Metrics.RegisterWorkloadKeyStats(c.txStream.KeyStats)
 
 	c.adapter = adapter

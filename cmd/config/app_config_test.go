@@ -503,6 +503,47 @@ func TestLoadGenProbabilityValidation(t *testing.T) {
 	}
 }
 
+// new-keys-rate / lookback-window are validated at config load: the non-negativity bound is a struct
+// tag, while the cross-field bounds (rate <= total slots; lookback-window >= total slots) are enforced
+// by ClientConfig.Validate(), which the loader runs after struct-tag validation.
+func TestLoadGenTransactionProfileValidation(t *testing.T) {
+	t.Parallel()
+	read := func(t *testing.T, yaml string) error {
+		t.Helper()
+		v := viper.New()
+		require.NoError(t, readYamlConfigsFromIO(v, strings.NewReader(yaml)))
+		return unmarshal(v, &loadgen.ClientConfig{})
+	}
+	// 5 total slots: 2 read-only + 2 read-write + 1 write.
+	profile := func(rate, window string) string {
+		return "load-profile:\n  transaction:\n" +
+			"    read-only-count: 2\n    read-write-count: 2\n    write-count: 1\n" +
+			"    new-keys-rate: " + rate + "\n    lookback-window: " + window + "\n"
+	}
+
+	for _, tc := range []struct {
+		name    string
+		yaml    string
+		wantErr bool
+	}{
+		{name: "valid split", yaml: profile("3", "100")},
+		{name: "rate at total slots", yaml: profile("5", "100")},
+		{name: "negative rate rejected by tag", yaml: profile("-1", "100"), wantErr: true},
+		{name: "rate above total slots rejected by Validate", yaml: profile("6", "100"), wantErr: true},
+		{name: "window below total slots rejected by Validate", yaml: profile("3", "4"), wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := read(t, tc.yaml)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func defaultDBConfig() *statedb.Config {
 	return &statedb.Config{
 		Endpoints:      []*connection.Endpoint{newEndpoint(connection.DefaultHost, 5433)},

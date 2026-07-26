@@ -64,15 +64,11 @@ func TestTxRegenerableByIndex(t *testing.T) {
 	p.Transaction.ReadWriteValueSize = 16
 	p.Transaction.BlindWriteValueSize = 8
 
-	gens := newIndependentTxGenerators(p, new(atomic.Uint64))
-	require.Len(t, gens, 1)
-	g := gens[0]
+	g := firstGen(t, p)
 
 	const n = 20
-	txs := make([]*servicepb.LoadGenTx, n)
-	for i := range n {
-		txs[i] = g.Next()
-	}
+	txs := g.buildAndSignBatch(n)
+	require.Len(t, txs, n)
 
 	// A second, independent process regenerates arbitrary transactions purely by global tx-id.
 	regen := newTxRandomProcess(p)
@@ -221,11 +217,12 @@ func TestGeneratorStreamWorkerCountInvariant(t *testing.T) {
 		p := DefaultProfile(workers)
 		p.Transaction.ReadWriteCount = 2
 		counter := new(atomic.Uint64)
-		gens := newIndependentTxGenerators(p, counter)
+		gens, err := newIndependentTxGenerators(p, counter)
+		require.NoError(t, err)
 		ids := make(map[string]struct{}, total)
 		for len(ids) < total {
 			for _, g := range gens {
-				ids[g.Next().Id] = struct{}{}
+				ids[g.buildAndSignBatch(1)[0].Id] = struct{}{}
 				if len(ids) >= total {
 					break
 				}
@@ -237,11 +234,11 @@ func TestGeneratorStreamWorkerCountInvariant(t *testing.T) {
 	require.Equal(t, idSet(1), idSet(4))
 }
 
-// BenchmarkTxNext measures full transaction generation per signature scheme. Signing dominates a
+// BenchmarkTxGeneration measures full transaction generation per signature scheme. Signing dominates a
 // real transaction by more than an order of magnitude, which is why the choice of derivation
 // primitive for keys, values, the nonce, and metadata (all SHA-256 derive) is not a throughput
 // concern — the derivation per TX is noise against the tens of µs of signing.
-func BenchmarkTxNext(b *testing.B) {
+func BenchmarkTxGeneration(b *testing.B) {
 	run := func(b *testing.B, scheme signature.Scheme) {
 		b.Helper()
 		p := DefaultProfile(1)
@@ -249,11 +246,11 @@ func BenchmarkTxNext(b *testing.B) {
 		p.Transaction.ReadWriteCount = 2
 		p.Transaction.BlindWriteCount = 1
 		p.Policy.NamespacePolicies[DefaultGeneratedNamespaceID] = &Policy{Scheme: scheme}
-		g := newIndependentTxGenerators(p, new(atomic.Uint64))[0]
+		g := firstGen(b, p)
 		b.ReportAllocs()
 		b.ResetTimer()
 		for range b.N {
-			benchTx = g.Next()
+			benchTx = g.buildAndSignBatch(1)[0]
 		}
 	}
 	b.Run("no-sign", func(b *testing.B) { run(b, signature.NoScheme) })

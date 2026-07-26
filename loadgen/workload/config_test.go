@@ -23,7 +23,8 @@ func TestTransactionProfileValidate(t *testing.T) {
 	require.NoError(t, (&TransactionProfile{ReadWriteCount: 2}).Validate())
 	require.NoError(t, (&TransactionProfile{ReadOnlyCount: 2, ReferenceGap: 5}).Validate())
 
-	// Split enabled: rate bounded by write slots; window must cover the total slot count.
+	// Split enabled: rate bounded by the total slot count; window must cover the total slot count.
+	// (Non-negativity of new-keys-rate is enforced by the `validate:"gte=0"` struct tag, not here.)
 	valid := &TransactionProfile{
 		ReadOnlyCount: 2, ReadWriteCount: 2, BlindWriteCount: 1,
 		NewKeysRate: ratePtr(2.5), ReferenceGap: 10, LookbackWindow: 100,
@@ -44,9 +45,6 @@ func TestTransactionProfileValidate(t *testing.T) {
 	tooMany := *valid
 	tooMany.NewKeysRate = ratePtr(6) // > totalSlots=5
 	require.Error(t, tooMany.Validate())
-
-	// A negative rate is rejected.
-	require.Error(t, (&TransactionProfile{NewKeysRate: ratePtr(-1)}).Validate())
 
 	// A window smaller than the total slot count is rejected (references could collide within a tx).
 	tooSmallWindow := *valid
