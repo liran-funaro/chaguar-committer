@@ -156,6 +156,34 @@ func TestSlotKeysSplit(t *testing.T) {
 	require.NotEqual(t, early.blindWrite[0], early.readOnly[0])
 }
 
+// TestSlotKeysNewReadOnly proves the lifted cap: when new-keys-rate exceeds the write-slot count, the
+// surplus new keys spill into read-only slots (fresh frontier indices — nonexistent reads), agnostically.
+func TestSlotKeysNewReadOnly(t *testing.T) {
+	t.Parallel()
+	p := DefaultProfile(1)
+	p.Transaction.ReadOnlyCount = 2
+	p.Transaction.ReadWriteCount = 1
+	p.Transaction.BlindWriteCount = 1
+	p.Transaction.NewKeysRate = ratePtr(4) // 4 > writeSlots(2); every slot is new every tx
+	p.Transaction.ReferenceGap = 0
+	p.Transaction.LookbackWindow = 8
+	require.NoError(t, p.Transaction.Validate())
+
+	proc := newTxRandomProcess(p)
+	for txID := range uint64(20) {
+		keys := proc.slotKeys(txID)
+		c := proc.committedFrontier(txID)
+		// With rate == slotsPerTx (4), all 4 slots create fresh indices [c, c+4); none is a backward ref.
+		got := append(append(append([]int64{}, keys.readWrite...), keys.blindWrite...), keys.readOnly...)
+		want := []int64{c, c + 1, c + 2, c + 3}
+		require.ElementsMatch(t, want, got, "tx %d: all slots should be fresh frontier indices", txID)
+		// Read-only slots specifically are non-negative fresh keys (not backward/negative references).
+		for _, ro := range keys.readOnly {
+			require.GreaterOrEqual(t, ro, c, "tx %d: read-only slot should be a fresh frontier index", txID)
+		}
+	}
+}
+
 // TestSlotKeysStaticWorkingSet covers new-keys-rate 0: nothing is ever created, so every slot references
 // the static pre-genesis (negative) working set [-W, 0). It also proves the per-transaction random
 // offset SPREADS references across the whole window rather than pinning them to a single key.

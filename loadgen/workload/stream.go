@@ -41,13 +41,13 @@ func NewTxStream(profile *Profile, options *StreamOptions) *TxStream {
 
 // KeyStats is a monotonic snapshot of the workload's key-generation counts, derived purely from the
 // number of transactions generated so far (N) and the (constant) split configuration. C(N) is the
-// committable-write frontier, RO the read-only slot count, and W the write-slot count (read-write +
-// blind-write) per transaction. When the split is disabled every slot is a fresh key, so there are no
-// references and CreatedKeys counts the fresh write creates (N*W).
+// key-index frontier, RO the read-only slot count, and W the write-slot count (read-write + blind-write)
+// per transaction. When the split is disabled every slot introduces a fresh index, so there are no
+// references and KeyFrontier counts every fresh slot (N*slotsPerTx).
 type KeyStats struct {
-	CreatedKeys         uint64 // committable frontier C(N): keys created by write slots
-	ReferencedReadKeys  uint64 // existing (backward) read-only references: N*RO
-	ReferencedWriteKeys uint64 // existing (backward) write-slot references: N*W - C(N)
+	KeyFrontier         uint64 // frontier C(N): all introduced key indices (incl. wasted read-introduced ones)
+	ReferencedReadKeys  uint64 // existing (backward) read-only refs (slots that didn't introduce a fresh index)
+	ReferencedWriteKeys uint64 // existing (backward) write-slot refs (write slots that didn't create)
 }
 
 // KeyStats returns the current key-generation counts, computed from the shared transaction counter and
@@ -60,16 +60,20 @@ func (s *TxStream) KeyStats() KeyStats {
 	p := s.gens[0].process
 	w := uint64(p.ReadWriteCount) + uint64(p.BlindWriteCount)
 	if p.NewKeysRate == nil {
-		// Split disabled: every slot is a fresh key, so writes create N*W keys and there are no references.
-		return KeyStats{CreatedKeys: n * w}
+		// Split disabled: every slot introduces a fresh index, so the frontier is N*slotsPerTx.
+		slotsPerTx := w + uint64(p.ReadOnlyCount)
+		return KeyStats{KeyFrontier: n * slotsPerTx}
 	}
-	// Split enabled: writes create up to C(N) keys; all read-only slots and the non-creating write slots
-	// are backward references into the working set.
+	// Split enabled: C(N) fresh indices are introduced writes-first. Clamp the write creates at N*W — once
+	// creates saturate the write slots the surplus falls on read-only slots as nonexistent reads — so both
+	// reference counts stay non-negative and monotonic even when new-keys-rate exceeds the write slots
+	// (created-writeCreates is the read-introduced count, bounded by N*RO since rate <= slotsPerTx).
 	created := uint64(max(0, p.committedFrontier(n)))
+	writeCreates := min(n*w, created)
 	return KeyStats{
-		CreatedKeys:         created,
-		ReferencedReadKeys:  n * uint64(p.ReadOnlyCount),
-		ReferencedWriteKeys: n*w - created,
+		KeyFrontier:         created,
+		ReferencedReadKeys:  n*uint64(p.ReadOnlyCount) - (created - writeCreates),
+		ReferencedWriteKeys: n*w - writeCreates,
 	}
 }
 

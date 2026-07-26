@@ -132,40 +132,38 @@ func (p *txRandomProcess) freshSlotKeys(txIdx uint64) txSlotKeys {
 	return p.newTxSlotKeysFromArray(newkeys)
 }
 
-// splitSlotKeys is the split-enabled layout. Let C = C(txIdx) and newWrites = C(txIdx+1) - C:
-//   - the first newWrites write slots CREATE at [C, C+newWrites) (read-write slots first — checked
-//     inserts — then blind writes);
-//   - every remaining write slot and every read-only slot BACKWARD-references an existing key drawn from
-//     the moving working set [top-W, top), where top = C(max(0, txIdx-gap)) is the frontier `gap`
-//     transactions behind and W = LookbackWindow. The offsets are a UNIFORM SAMPLE WITHOUT REPLACEMENT
-//     of [0, W) drawn by Floyd's algorithm (seeded from the tx index), so a transaction's slots reference
-//     a distinct, scattered subset of the window rather than a single contiguous run. Floyd's fixes the
-//     subset uniformly but does not shuffle it, so which drawn key lands on which slot is not itself
-//     uniform — immaterial here, where contention depends only on which keys are touched and that they
-//     are distinct.
+// splitSlotKeys is the split-enabled layout. Let C = C(txIdx) and newKeys = C(txIdx+1) - C:
+//   - the first newKeys slots, in layout order (read-write, then blind-write, then read-only), get fresh
+//     frontier indices at [C, C+newKeys): a new WRITE slot CREATES its key, while a new READ slot is a
+//     NONEXISTENT READ — it never creates, so the frontier index it consumes is wasted (never becomes a
+//     committed key). Only writes advance real committed state, but the frontier counts every introduced
+//     index, write or read.
+//   - every remaining slot BACKWARD-references an existing key drawn from the moving working set
+//     [top-W, top), where top = C(max(0, txIdx-gap)) is the frontier `gap` transactions behind and
+//     W = LookbackWindow. The offsets are a UNIFORM SAMPLE WITHOUT REPLACEMENT of [0, W) drawn by Floyd's
+//     algorithm (seeded from the tx index), so a transaction's slots reference a distinct, scattered
+//     subset of the window rather than a single contiguous run. Floyd's fixes the subset uniformly but
+//     does not shuffle it, so which drawn key lands on which slot is not itself uniform — immaterial
+//     here, where contention depends only on which keys are touched and that they are distinct.
 //
-// Creates (>= C >= top) and backward references (< top) are disjoint, and sampling without replacement
-// keeps the references distinct (Validate guarantees W >= total slots, so the window is always wide
-// enough to draw one distinct key per slot). Backward indices go NEGATIVE during run-start warmup, and
-// stay negative for the whole run when the rate is 0 (no creates); these are distinct pre-genesis keys no
-// create ever produces, so we do not clamp.
+// Fresh indices (>= C >= top) and backward references (< top) are disjoint, and sampling without
+// replacement keeps the references distinct (Validate guarantees W >= total slots, so the window is
+// always wide enough to draw one distinct key per slot). Backward indices go NEGATIVE during run-start
+// warmup, and stay negative for the whole run when the rate is 0 (no creates); these are distinct
+// pre-genesis keys no create ever produces, so we do not clamp.
 func (p *txRandomProcess) splitSlotKeys(txIdx uint64) txSlotKeys {
 	slotsPerTx := int64(p.ReadWriteCount + p.BlindWriteCount + p.ReadOnlyCount)
-	writeSlots := int64(p.ReadWriteCount) + int64(p.BlindWriteCount)
 	committedFrontier := p.committedFrontier(txIdx)
-	newWrites := min(writeSlots, p.committedFrontier(txIdx+1)-committedFrontier) // in [0, writeSlots]
+	newKeys := min(slotsPerTx, p.committedFrontier(txIdx+1)-committedFrontier) // in [0, slotsPerTx]
 	allkeys := make([]int64, slotsPerTx)
-	fillNewKeys(allkeys, committedFrontier, newWrites)
+	fillNewKeys(allkeys, committedFrontier, newKeys)
 
-	// The working set ends `gap` transactions behind and is W keys wide: [top-W, top). The nRefs offsets
-	// are a distinct uniform subset of [0, window) drawn by Floyd's algorithm from one shared byte block,
-	// so the references scatter across the window instead of forming a contiguous run.
 	window := int64(p.LookbackWindow) //nolint:gosec // lookback-window config value fits int64.
 	top := p.committedFrontier(txIdx - min(txIdx, p.ReferenceGap))
-	nRefs := slotsPerTx - newWrites
+	nRefs := slotsPerTx - newKeys
 	rnd := p.derive(domainRef, txIdx, 0, uint32(8*nRefs)) //nolint:gosec // small slot count fits uint32.
 	clear(p.selectedSet)
-	for i := range slotsPerTx - newWrites {
+	for i := range slotsPerTx - newKeys {
 		j := window - nRefs + i
 		//nolint:gosec // j+1 >= 1 since Validate guarantees window >= nRefs, so the modulus is positive.
 		t := int64(binary.BigEndian.Uint64(rnd[8*i:]) % uint64(j+1))
@@ -173,9 +171,8 @@ func (p *txRandomProcess) splitSlotKeys(txIdx uint64) txSlotKeys {
 			t = j
 		}
 		p.selectedSet[t] = struct{}{}
-		allkeys[newWrites+i] = top - 1 - t
+		allkeys[newKeys+i] = top - 1 - t
 	}
-
 	return p.newTxSlotKeysFromArray(allkeys)
 }
 

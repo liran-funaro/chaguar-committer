@@ -109,16 +109,20 @@ func NewLoadgenServiceMetrics(c *Config) *PerfMetrics {
 func (c *PerfMetrics) RegisterWorkloadKeyStats(get func() workload.KeyStats) {
 	c.Registry().MustRegister(
 		prometheus.NewCounterFunc(prometheus.CounterOpts{
-			Namespace: "loadgen", Name: "created_keys_total",
-			Help: "Total number of new keys created (committable) by the generator",
-		}, func() float64 { return float64(get().CreatedKeys) }),
+			Namespace: "loadgen",
+			Name:      "key_frontier_total",
+			Help: "Committable-key frontier C(N): all introduced key indices, including ones that never " +
+				"become committed keys (aborted checked-inserts and read-introduced nonexistent reads)",
+		}, func() float64 { return float64(get().KeyFrontier) }),
 		prometheus.NewCounterFunc(prometheus.CounterOpts{
-			Namespace: "loadgen", Name: "referenced_read_keys_total",
-			Help: "Total number of existing (backward) read-only key references generated",
+			Namespace: "loadgen",
+			Name:      "referenced_read_keys_total",
+			Help:      "Total number of existing (backward) read-only key references generated",
 		}, func() float64 { return float64(get().ReferencedReadKeys) }),
 		prometheus.NewCounterFunc(prometheus.CounterOpts{
-			Namespace: "loadgen", Name: "referenced_write_keys_total",
-			Help: "Total number of existing write-slot key references (read-write + blind-write) generated",
+			Namespace: "loadgen",
+			Name:      "referenced_write_keys_total",
+			Help:      "Total number of existing write-slot key references (read-write + blind-write) generated",
 		}, func() float64 { return float64(get().ReferencedWriteKeys) }),
 	)
 }

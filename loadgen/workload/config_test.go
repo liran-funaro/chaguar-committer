@@ -35,10 +35,15 @@ func TestTransactionProfileValidate(t *testing.T) {
 	zero.NewKeysRate = ratePtr(0)
 	require.NoError(t, zero.Validate())
 
-	// new-keys-rate > write slots is rejected.
-	tooManyWrites := *valid
-	tooManyWrites.NewKeysRate = ratePtr(3.5) // > W=3
-	require.Error(t, tooManyWrites.Validate())
+	// new-keys-rate up to the TOTAL slot count is valid (surplus spills into read-only nonexistent reads).
+	upToTotal := *valid
+	upToTotal.NewKeysRate = ratePtr(3.5) // <= totalSlots=5
+	require.NoError(t, upToTotal.Validate())
+
+	// new-keys-rate above the total slot count is rejected.
+	tooMany := *valid
+	tooMany.NewKeysRate = ratePtr(6) // > totalSlots=5
+	require.Error(t, tooMany.Validate())
 
 	// A negative rate is rejected.
 	require.Error(t, (&TransactionProfile{NewKeysRate: ratePtr(-1)}).Validate())

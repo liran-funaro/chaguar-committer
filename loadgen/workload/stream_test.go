@@ -231,9 +231,37 @@ func TestTxStreamKeyStats(t *testing.T) {
 	w := uint64(p.Transaction.ReadWriteCount + p.Transaction.BlindWriteCount)
 	ro := uint64(p.Transaction.ReadOnlyCount)
 	require.Equal(t, KeyStats{
-		CreatedKeys:         150,       // floor(100*1.5)
+		KeyFrontier:         150,       // floor(100*1.5)
 		ReferencedReadKeys:  n * ro,    // every read-only slot is a backward ref
 		ReferencedWriteKeys: n*w - 150, // remaining write slots are backward refs
+	}, s.KeyStats())
+}
+
+// TestTxStreamKeyStatsAboveWriteCap covers new-keys-rate ABOVE the write-slot count, where surplus new
+// keys spill into read-only slots as nonexistent reads. The reference counts must stay non-negative and
+// monotonic (no uint64 underflow): write creates clamp at N*W, and the overflow is attributed to reads.
+func TestTxStreamKeyStatsAboveWriteCap(t *testing.T) {
+	t.Parallel()
+	p := DefaultProfile(1)
+	p.Transaction.ReadOnlyCount = 2
+	p.Transaction.ReadWriteCount = 1
+	p.Transaction.BlindWriteCount = 1
+	p.Transaction.NewKeysRate = ratePtr(3) // 3 new/tx > write slots (2): 2 writes create, 1 read-only is fresh
+	p.Transaction.ReferenceGap = 0
+	p.Transaction.LookbackWindow = 8
+	require.NoError(t, p.Transaction.Validate())
+
+	s := NewTxStream(p, defaultStreamOptions())
+	const n = 100
+	for range n {
+		s.gens[0].Next()
+	}
+	// C(N)=300; write creates clamp at N*W=200 => 0 write backward refs; read-introduced = 300-200 = 100,
+	// so read backward refs = N*RO - 100 = 200 - 100 = 100.
+	require.Equal(t, KeyStats{
+		KeyFrontier:         300,
+		ReferencedReadKeys:  100,
+		ReferencedWriteKeys: 0,
 	}, s.KeyStats())
 }
 
@@ -251,7 +279,8 @@ func TestTxStreamKeyStatsSplitDisabled(t *testing.T) {
 		s.gens[0].Next()
 	}
 	w := uint64(p.Transaction.ReadWriteCount + p.Transaction.BlindWriteCount)
-	require.Equal(t, KeyStats{CreatedKeys: n * w}, s.KeyStats())
+	slotsPerTx := w + uint64(p.Transaction.ReadOnlyCount)
+	require.Equal(t, KeyStats{KeyFrontier: n * slotsPerTx}, s.KeyStats())
 }
 
 func TestGenValidBlock(t *testing.T) {

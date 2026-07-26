@@ -167,21 +167,24 @@ load-profile:
     #     nil-version read asserts the key does not exist, then the write creates it. Read-write slots
     #     take the creates first. A conflict here (a concurrent creator) is measured contention, but may
     #     waste a key — taken out of the queue but never written.
-    #   - A READ-ONLY slot NEVER creates; pointing it at a not-yet-created key would "waste" that key
-    #     (read forever as nil). So every read-only slot references an ALREADY-CREATED key.
+    #   - A READ-ONLY slot NEVER creates. When new-keys-rate exceeds the write-slot count, the surplus
+    #     assigns read-only slots a fresh key index too — a NONEXISTENT READ, read forever as nil since no
+    #     write ever targets it. Otherwise every read-only slot references an ALREADY-CREATED key.
     # Forward references (a read of a key a later write creates) are NOT synthesized: the orderer and the
     # parallel workers reorder transactions, so backward references near the frontier become forward
     # references for free — a backward window at distance `reference-gap` is statistically the same as
     # looking forward AND backward at gap/2.
     #
-    # Average number of NEW committable keys created per transaction by the write slots. The committable
-    # frontier grows as floor(j * new-keys-rate) after j transactions; flooring keeps the per-transaction
-    # count deterministic. The first floor((j+1)*rate)-floor(j*rate) write slots create; every remaining
-    # write slot and every read-only slot references an already-created key. UNSET (default) DISABLES the
-    # split (every slot is a fresh unique key). A value of 0 means NO creates at all (every slot
-    # references the static pre-genesis working set). A positive value must not exceed the write-slot
-    # count (read-write-count + write-count). To keep read-writes doing checked inserts rather than
-    # forcing blind-write overflow, keep new-keys-rate <= write-count.
+    # Average number of NEW keys assigned per transaction, in layout order (read-write, then blind-write,
+    # then read-only). The frontier grows as floor(j * new-keys-rate) after j transactions; flooring keeps
+    # the per-transaction count deterministic. The first floor((j+1)*rate)-floor(j*rate) slots, in that
+    # layout order, get a fresh key index: only WRITE slots (read-write, then blind-write) create a
+    # committable key; read-only slots above the write capacity become nonexistent reads. Every remaining
+    # slot references an already-created key. UNSET (default) DISABLES the split (every slot is a fresh
+    # unique key). A value of 0 means NO new keys at all (every slot references the static pre-genesis
+    # working set). A positive value must not exceed the TOTAL slot count (read-only + read-write-count +
+    # write-count). To keep read-writes doing checked inserts rather than forcing blind-write overflow,
+    # keep new-keys-rate <= read-write-count.
     # new-keys-rate: 1
     # Minimum transaction distance behind the current transaction from which existing references are
     # drawn: at transaction j the reference window ends at the frontier as of j-gap. 0 (default)

@@ -87,13 +87,14 @@ type TransactionProfile struct {
 	// new-keys-rate (to any value >= 0, including 0) switches on the split, where keys are REUSED across
 	// transactions, producing the commit-time contention the coordinator must order.
 	//
-	// Reads and writes share ONE key space, and a key is only ever CREATED by a WRITE slot:
-	//   - A READ-WRITE slot that targets a not-yet-created key is the canonical CHECKED INSERT: its
+	// Reads and writes share ONE key space. New frontier indices are assigned WRITES-FIRST (read-write,
+	// then blind-write, then read-only), so a key is CREATED only when a WRITE slot introduces it:
+	//   - A READ-WRITE slot that introduces a not-yet-created key is the canonical CHECKED INSERT: its
 	//     nil-version read asserts the key does not exist, then the write creates it. A conflict here (a
 	//     concurrent creator) is measured contention, but may waste a key - taken out of the queue but never written.
-	//   - A READ-ONLY slot NEVER creates. Pointing a read-only slot at a not-yet-created key would "waste"
-	//     it — a key index nothing ever creates, read forever as nil. So every read-only slot references
-	//     an ALREADY-CREATED key.
+	//   - A READ-ONLY slot never creates. It gets a fresh index only when the per-transaction new-key budget
+	//     exceeds the write slots; that read is then a NONEXISTENT READ (a wasted index nothing ever creates,
+	//     read as nil). Otherwise a read-only slot references an ALREADY-CREATED key.
 	//
 	// We do NOT explicitly synthesize forward references (a read of a key a later transaction creates). The orderer
 	// may commit transactions out of order, and the parallel workers submit batches in arbitrary order,
@@ -102,13 +103,16 @@ type TransactionProfile struct {
 	// gap/2 around a fuzzy commit frontier. One counter — the committable frontier — drives everything.
 
 	// NewKeysRate is OPTIONAL: nil (unset) uses a fresh-key workload; a non-nil value
-	// enables the split. It is the average number of NEW committable keys created per transaction by the
-	// write slots (read-write + blind-write); the committable frontier grows as C(j) = floor(j * rate)
-	// (flooring keeps the per-transaction create count deterministic). Per transaction the first
-	// C(j+1)-C(j) write slots CREATE (read-write slots first — checked inserts — then blind writes), and
-	// every remaining write slot and every read-only slot REFERENCES an already-created key. A value of 0
-	// means NO creates at all: every slot references the static pre-genesis (negative) working set. A
-	// positive value must not exceed the write-slot count (read-write-count + write-count).
+	// enables the split. It is the average number of NEW frontier keys introduced per transaction, applied
+	// to reads AND writes alike in layout order (read-write, then blind-write, then read-only); the
+	// frontier grows as C(j) = floor(j * rate) (flooring keeps the per-transaction new-key count
+	// deterministic). Per transaction the first C(j+1)-C(j) slots, in that layout order, get a fresh
+	// frontier index: a new WRITE slot CREATES the key (read-write slots are checked inserts), while a new
+	// READ slot is a NONEXISTENT READ (a wasted index that never becomes a committed key). Every remaining
+	// slot REFERENCES an already-created key. A value of 0 means NO new keys at all: every slot references
+	// the static pre-genesis (negative) working set. A positive value must not exceed the TOTAL slot count
+	// (read-only + read-write-count + write-count); surplus beyond the write-slot count spills into
+	// read-only slots as nonexistent reads.
 	NewKeysRate *float64 `mapstructure:"new-keys-rate" yaml:"new-keys-rate"`
 	// ReferenceGap is the MINIMUM transaction distance behind the current transaction from which existing
 	// references are drawn: at transaction j the reference window ends at the committable frontier as of
@@ -131,8 +135,8 @@ type TransactionProfile struct {
 }
 
 // Validate checks the split configuration. An unset new-keys-rate keeps the historical fresh-key
-// workload (reference-gap and lookback-window are ignored). When set, the create rate must not exceed
-// the write-slot count (so the per-transaction create count never overflows the write slots), and the
+// workload (reference-gap and lookback-window are ignored). When set, the rate must not exceed the total
+// slot count (so the per-transaction new-key count never overflows the transaction's slots), and the
 // lookback window must be at least the total slot count so every reference within a transaction is
 // distinct.
 func (p *TransactionProfile) Validate() error {
@@ -143,11 +147,11 @@ func (p *TransactionProfile) Validate() error {
 	if rate < 0 {
 		return errors.Newf("new-keys-rate must be non-negative, got %v", rate)
 	}
-	if writeSlots := float64(p.ReadWriteCount + p.BlindWriteCount); rate > writeSlots {
-		return errors.Newf("new-keys-rate %v exceeds write slots %v (read-write-count + write-count)",
-			rate, writeSlots)
-	}
 	totalSlots := uint64(p.ReadOnlyCount) + uint64(p.ReadWriteCount) + uint64(p.BlindWriteCount)
+	if rate > float64(totalSlots) {
+		return errors.Newf("new-keys-rate %v exceeds total slots %d (read-only + read-write + write)",
+			rate, totalSlots)
+	}
 	if p.LookbackWindow < totalSlots {
 		return errors.Newf("lookback-window %d must be at least the total slot count %d so every "+
 			"reference within a transaction is distinct", p.LookbackWindow, totalSlots)
